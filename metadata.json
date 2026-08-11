@@ -1,0 +1,6 @@
+{
+  "name": "Interview Prep AI",
+  "description": "An AI-powered interview preparation app with customizable job roles, question types, and automated scoring.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
