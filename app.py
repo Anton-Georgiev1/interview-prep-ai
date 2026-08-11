@@ -790,7 +790,7 @@ Return ONLY a valid JSON object matching this schema:
 def run_server():
     socketserver.TCPServer.allow_reuse_address = True
     server = socketserver.ThreadingTCPServer((HOST, PORT), PythonInterviewServer)
-    print(f"★ Python Technical Interview Server running on http://{HOST}:{PORT}")
+    print(f"★ Interview Prep AI Server running on http://localhost:{PORT}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
