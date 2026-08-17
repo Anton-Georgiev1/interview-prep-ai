@@ -640,7 +640,12 @@ class PythonInterviewServer(http.server.BaseHTTPRequestHandler):
             "gemini-3.5-flash",
             "gemini-3.5-flash-lite",
             "gemini-2.0-flash",
-            "gemini-1.5-flash"
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-8b",
+            "gemini-2.5-pro",
+            "gemini-1.5-pro",
+            "gemini-2.5-flash"
         ]
         payload = {
             "contents": [{
@@ -667,7 +672,7 @@ class PythonInterviewServer(http.server.BaseHTTPRequestHandler):
                     res_json = json.loads(res_body)
                     candidates = res_json.get('candidates', [])
                     if not candidates:
-                        raise Exception("Gemini API returned an empty response.")
+                        raise Exception(f"Model {model} returned an empty candidates list.")
                     text_result = candidates[0]['content']['parts'][0]['text'].strip()
                     # Strip any markdown code fences if returned
                     if text_result.startswith("```json"):
@@ -684,17 +689,21 @@ class PythonInterviewServer(http.server.BaseHTTPRequestHandler):
                     msg = err_json.get('error', {}).get('message', str(e))
                 except Exception:
                     msg = str(e)
-                # If model is not found (404), try the next model in our list
-                if e.code == 404:
-                    last_error = f"Model {model} 404: {msg}"
-                    continue
-                # For auth errors, quota, or parameter issues, fail immediately with clear explanation
-                raise Exception(f"Gemini API Error ({e.code}): {msg}")
+                
+                # Check for fatal invalid API key
+                if "API_KEY_INVALID" in msg or "API key not valid" in msg:
+                    raise Exception(f"Invalid Gemini API Key: {msg}")
+
+                # Automatically switch to next model on high demand (503), rate limit (429), model not found (404), or server errors (500, 502, 504)
+                print(f"[Gemini Fallback] Model {model} failed with HTTP {e.code}: {msg}. Trying next available model...")
+                last_error = f"{model} ({e.code}): {msg}"
+                continue
             except Exception as e:
-                last_error = str(e)
+                print(f"[Gemini Fallback] Model {model} exception: {e}. Trying next available model...")
+                last_error = f"{model}: {str(e)}"
                 continue
 
-        raise Exception(f"Failed to connect to Gemini API: {last_error}")
+        raise Exception(f"All Gemini models were busy or unavailable. Last response: {last_error}")
 
     def handle_generate_questions(self, data):
         import time
