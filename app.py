@@ -630,11 +630,18 @@ class PythonInterviewServer(http.server.BaseHTTPRequestHandler):
             self.end_headers()
 
     def call_gemini_api(self, prompt, user_key=None):
-        api_key = user_key or os.environ.get("GEMINI_API_KEY", "")
+        api_key = (user_key or os.environ.get("GEMINI_API_KEY", "")).strip()
         if not api_key:
-            raise Exception("No Gemini API key provided. Set GEMINI_API_KEY env or enter it in Setup.")
+            raise Exception("No Gemini API key provided. Please enter your API key in the 'API Setup' tab.")
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+        models_to_try = [
+            "gemini-3.6-flash",
+            "gemini-3.7-flash",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash"
+        ]
         payload = {
             "contents": [{
                 "parts": [{"text": prompt}]
@@ -644,18 +651,50 @@ class PythonInterviewServer(http.server.BaseHTTPRequestHandler):
             }
         }
 
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode('utf-8'),
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
+        last_error = None
+        for model in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode('utf-8'),
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
 
-        with urllib.request.urlopen(req) as resp:
-            res_body = resp.read().decode('utf-8')
-            res_json = json.loads(res_body)
-            text_result = res_json['candidates'][0]['content']['parts'][0]['text']
-            return text_result
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    res_body = resp.read().decode('utf-8')
+                    res_json = json.loads(res_body)
+                    candidates = res_json.get('candidates', [])
+                    if not candidates:
+                        raise Exception("Gemini API returned an empty response.")
+                    text_result = candidates[0]['content']['parts'][0]['text'].strip()
+                    # Strip any markdown code fences if returned
+                    if text_result.startswith("```json"):
+                        text_result = text_result[7:]
+                    elif text_result.startswith("```"):
+                        text_result = text_result[3:]
+                    if text_result.endswith("```"):
+                        text_result = text_result[:-3]
+                    return text_result.strip()
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode('utf-8', errors='ignore')
+                try:
+                    err_json = json.loads(err_body)
+                    msg = err_json.get('error', {}).get('message', str(e))
+                except Exception:
+                    msg = str(e)
+                # If model is not found (404), try the next model in our list
+                if e.code == 404:
+                    last_error = f"Model {model} 404: {msg}"
+                    continue
+                # For auth errors, quota, or parameter issues, fail immediately with clear explanation
+                raise Exception(f"Gemini API Error ({e.code}): {msg}")
+            except Exception as e:
+                last_error = str(e)
+                continue
+
+        raise Exception(f"Failed to connect to Gemini API: {last_error}")
 
     def handle_generate_questions(self, data):
         import time
