@@ -12,7 +12,7 @@ An elegant, **zero-dependency**, AI-powered interview preparation companion desi
 
 ## 🌟 Why Interview Prep AI?
 
-Preparing for interviews is often a generic experience—practicing with stale question banks that do not align with the actual job description. **Interview Prep AI** changes that by acting as a highly specialized executive interviewer. 
+Preparing for interviews is often a generic experience-practicing with stale question banks that do not align with the actual job description. **Interview Prep AI** changes that by acting as a highly specialized executive interviewer. 
 
 Whether you are preparing for a Senior Python Engineer role, a Product Owner position, or a creative design role, this application scans the actual job description (or webpage), tailors a customized 10-question evaluation, and acts as your personal coach.
 
@@ -72,11 +72,11 @@ Designed with a modern, fully responsive dark-first aesthetic, the UI uses **Tai
 
 ### Server Architecture
 The server is built with `socketserver.ThreadingTCPServer` and handles concurrent requests gracefully. It serves static assets (the HTML/JS bundle) and hosts several REST endpoints:
-* `GET /` — Serves the Single Page Application.
-* `POST /api/generate-questions` — Prepares custom tailored questions.
-* `POST /api/evaluate-interview` — Scores, validates, and evaluates responses.
-* `GET /api/saved-sessions` / `POST /api/save-session` / `POST /api/clear-sessions` — In-memory historical logging.
-* `GET /api/active-model` — Retrieves the active API model state.
+* `GET /` - Serves the Single Page Application.
+* `POST /api/generate-questions` - Prepares custom tailored questions.
+* `POST /api/evaluate-interview` - Scores, validates, and evaluates responses.
+* `GET /api/saved-sessions` / `POST /api/save-session` / `POST /api/clear-sessions` - In-memory historical logging.
+* `GET /api/active-model` - Retrieves the active API model state.
 
 ### Dynamic Model Fallback Chain
 If a Gemini model becomes overloaded, the server evaluates available alternatives. It sequentially cycles through:
