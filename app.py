@@ -91,7 +91,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div id="view-setup" class="hidden bg-white dark:bg-slate-800/80 rounded-2xl border border-slate-200 dark:border-slate-700 p-6 shadow-sm space-y-4">
             <h2 id="setup-title" class="text-sm font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400">Gemini API Key Configuration</h2>
             <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                Provide your Google Gemini API Key. It will be stored securely in your browser's LocalStorage and used directly for generating questions, instant answer checking, hints, and final overall evaluations.
+                Provide your Google Gemini API Key. It will be stored securely in your browser's LocalStorage and used directly for generating questions, instant answer checking, hints, and fast evaluations.
             </p>
             <div class="space-y-2">
                 <input type="password" id="api-key-input" placeholder="AIzaSy..." class="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500">
@@ -728,7 +728,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         async function finishInterview() {
             saveCurrentTextAnswer();
-            const t = i18n[currentLang];
             const modal = document.getElementById('eval-modal');
             modal.classList.remove('hidden');
 
@@ -918,18 +917,19 @@ class PythonInterviewServer(http.server.BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def call_gemini_api(self, prompt, user_key=None):
+    def call_gemini_api(self, prompt, user_key=None, max_output_tokens=4096):
         api_key = (user_key or os.environ.get("GEMINI_API_KEY", "")).strip()
         if not api_key:
             raise Exception("No Gemini API key provided. Please enter your API key in the 'API Setup' tab.")
 
+        # Prioritize fastest ultra-low-latency models
         models_to_try = [
-            "gemini-3.6-flash",
-            "gemini-3.7-flash",
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
             "gemini-2.0-flash",
             "gemini-2.0-flash-lite",
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
             "gemini-1.5-flash",
             "gemini-1.5-flash-8b",
             "gemini-2.5-pro",
@@ -941,7 +941,9 @@ class PythonInterviewServer(http.server.BaseHTTPRequestHandler):
                 "parts": [{"text": prompt}]
             }],
             "generationConfig": {
-                "responseMimeType": "application/json"
+                "responseMimeType": "application/json",
+                "maxOutputTokens": max_output_tokens,
+                "temperature": 0.4
             }
         }
 
@@ -956,20 +958,35 @@ class PythonInterviewServer(http.server.BaseHTTPRequestHandler):
             )
 
             try:
-                with urllib.request.urlopen(req, timeout=35) as resp:
+                with urllib.request.urlopen(req, timeout=30) as resp:
                     res_body = resp.read().decode('utf-8')
                     res_json = json.loads(res_body)
                     candidates = res_json.get('candidates', [])
                     if not candidates:
                         raise Exception(f"Model {model} returned an empty candidates list.")
+                    
+                    finish_reason = candidates[0].get('finishReason', '')
                     text_result = candidates[0]['content']['parts'][0]['text'].strip()
+                    
                     if text_result.startswith("```json"):
                         text_result = text_result[7:]
                     elif text_result.startswith("```"):
                         text_result = text_result[3:]
                     if text_result.endswith("```"):
                         text_result = text_result[:-3]
-                    return text_result.strip()
+                    text_result = text_result.strip()
+
+                    # Verify it's valid JSON
+                    try:
+                        json.loads(text_result)
+                        return text_result
+                    except json.JSONDecodeError:
+                        # If truncated by token limit, try next model or raise
+                        if finish_reason == "MAX_TOKENS":
+                            print(f"[Gemini Fallback] Model {model} exceeded token limit. Trying next model...")
+                            last_error = f"Model {model} hit token limit ({finish_reason})"
+                            continue
+                        raise
             except urllib.error.HTTPError as e:
                 err_body = e.read().decode('utf-8', errors='ignore')
                 try:
@@ -1011,7 +1028,7 @@ class PythonInterviewServer(http.server.BaseHTTPRequestHandler):
                         job_context,
                         headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
                     )
-                    with urllib.request.urlopen(req, timeout=6) as resp:
+                    with urllib.request.urlopen(req, timeout=5) as resp:
                         raw_html = resp.read().decode('utf-8', errors='ignore')
                         clean_text = re.sub(r'<script[^>]*>.*?</script>', '', raw_html, flags=re.DOTALL)
                         clean_text = re.sub(r'<style[^>]*>.*?</style>', '', clean_text, flags=re.DOTALL)
@@ -1047,8 +1064,8 @@ CRITICAL REQUIREMENTS:
 1. Generate EXACTLY 10 high-quality, relevant, and realistic interview questions tailored specifically for '{job_title}'.
 2. If job posting text or URL is provided, analyze it thoroughly and generate questions directly testing those specific skills.
 3. For EVERY question include:
-   - "hint": A subtle, constructive guidance hint without directly spoiling the answer.
-   - "suggestedAnswer": A comprehensive model answer illustrating the ideal candidate response.
+   - "hint": A concise guiding hint (1-2 sentences).
+   - "suggestedAnswer": A concise model answer (2-3 sentences).
 4. For 'multiple_choice' type:
    - Include "options" array with exactly 4 choices (A, B, C, D).
    - Include "correctAnswer": String ("A", "B", "C", or "D") indicating the single correct choice.
@@ -1059,18 +1076,18 @@ Return ONLY a valid JSON object matching this schema:
   "questions": [
     {{
       "id": "q1",
-      "text": "Detailed question text...",
+      "text": "Question text...",
       "type": "{interview_type}",
       "options": ["Choice A text", "Choice B text", "Choice C text", "Choice D text"],
       "correctAnswer": "A",
-      "hint": "Constructive guiding hint...",
-      "suggestedAnswer": "Detailed ideal candidate answer..."
+      "hint": "Guiding hint...",
+      "suggestedAnswer": "Concise model answer..."
     }}
   ]
 }}"""
 
         try:
-            raw_text = self.call_gemini_api(prompt, api_key)
+            raw_text = self.call_gemini_api(prompt, api_key, max_output_tokens=3000)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -1089,62 +1106,129 @@ Return ONLY a valid JSON object matching this schema:
 
         job_title = session.get('jobTitle', 'Candidate')
         questions = session.get('questions', [])
+        interview_type = session.get('type', 'multiple_choice')
 
-        if lang == "BG":
-            lang_instruction = """STRICT LANGUAGE REQUIREMENT:
-The comprehensive evaluation report ("summaryFeedback") and individual feedback for all questions MUST be written 100% in fluent, professional BULGARIAN (български език)."""
-        else:
-            lang_instruction = """STRICT LANGUAGE REQUIREMENT:
-Write the comprehensive summary report and question feedback in clear, professional English."""
+        # Fast Instant Pre-Scoring for Multiple Choice Quiz
+        is_all_mcq = (interview_type == 'multiple_choice') or all(q.get('type') == 'multiple_choice' for q in questions)
+        
+        if is_all_mcq:
+            # Deterministic, ultra-fast 0ms exact calculation for MCQ
+            question_reviews = []
+            correct_count = 0
+            total_count = len(questions)
 
+            for idx, q in enumerate(questions):
+                q_id = q.get('id', f'q{idx+1}')
+                user_ans = user_answers.get(q_id, '')
+                correct_ans = q.get('correctAnswer', 'A')
+                is_correct = (user_ans == correct_ans) and (user_ans != '')
+
+                if is_correct:
+                    score = 100
+                    correct_count += 1
+                    feedback = "Правилен отговор! Избрахте точния верен вариант." if lang == "BG" else "Correct! You selected the accurate choice."
+                elif not user_ans:
+                    score = 0
+                    feedback = f"Въпросът беше пропуснат. Верният отговор е Опция {correct_ans}." if lang == "BG" else f"Question was skipped. Correct answer is Option {correct_ans}."
+                else:
+                    score = 0
+                    feedback = f"Неточен избор. Избрахте {user_ans}, а верният отговор е Опция {correct_ans}." if lang == "BG" else f"Incorrect choice. You selected {user_ans}; the correct option is {correct_ans}."
+
+                question_reviews.append({
+                    "id": q_id,
+                    "questionText": q.get('text', ''),
+                    "userAnswer": user_ans or ('Пропуснат' if lang == 'BG' else 'Skipped'),
+                    "correctAnswer": correct_ans,
+                    "score": score,
+                    "feedback": feedback,
+                    "suggestedAnswer": q.get('suggestedAnswer', '')
+                })
+
+            overall_score = round((correct_count / total_count) * 100) if total_count > 0 else 0
+
+            # Generate concise executive summary in under 1 second
+            if lang == "BG":
+                summary_prompt = f"""Напиши кратко, структурирано обобщение (3-4 изречения) за представянето на кандидат за позиция '{job_title}'.
+Общ резултат от теста: {overall_score}/100 ({correct_count} от {total_count} верни въпроса).
+Върни САМО JSON: {{"summaryFeedback": "Обобщен текст с препоръки..."}}"""
+            else:
+                summary_prompt = f"""Write a concise, professional executive summary (3-4 sentences) evaluating a candidate applying for '{job_title}'.
+Quiz Score: {overall_score}/100 ({correct_count} out of {total_count} correct questions).
+Return ONLY JSON: {{"summaryFeedback": "Summary feedback and key recommendations..."}}"""
+
+            try:
+                raw_summary = self.call_gemini_api(summary_prompt, api_key, max_output_tokens=500)
+                summary_data = json.loads(raw_summary)
+                summary_text = summary_data.get('summaryFeedback', '')
+            except Exception:
+                if lang == "BG":
+                    summary_text = f"Кандидатът завърши теста за позиция '{job_title}' с резултат {overall_score}/100 ({correct_count} от {total_count} верни отговора). Препоръчва се преговор на сгрешените въпроси за затвърждаване на знанията."
+                else:
+                    summary_text = f"Candidate completed the assessment for '{job_title}' with a score of {overall_score}/100 ({correct_count} of {total_count} correct). Review incorrect responses to reinforce core concepts."
+
+            response_payload = {
+                "overallScore": overall_score,
+                "summaryFeedback": summary_text,
+                "questionReviews": question_reviews
+            }
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(response_payload, ensure_ascii=False).encode('utf-8'))
+            return
+
+        # For Free Writing / Open Technical Interviews
         qa_pairs = []
         for idx, q in enumerate(questions):
-            ans = user_answers.get(q.get('id', f'q{idx+1}'), 'No answer provided (Skipped)')
-            correct_ans = q.get('correctAnswer', '')
+            ans = user_answers.get(q.get('id', f'q{idx+1}'), 'Skipped')
             qa_pairs.append({
                 "number": idx + 1,
                 "id": q.get('id', f'q{idx+1}'),
                 "question": q.get('text', ''),
-                "type": q.get('type', 'multiple_choice'),
-                "userAnswer": ans,
-                "correctAnswer": correct_ans,
-                "options": q.get('options', []),
-                "suggestedAnswer": q.get('suggestedAnswer', '')
+                "userAnswer": ans[:400]
             })
 
-        prompt = f"""You are an executive hiring board evaluating a complete 10-question interview for a candidate applying for '{job_title}'.
-{lang_instruction}
-
-Candidate's Completed Interview Data:
-{json.dumps(qa_pairs, ensure_ascii=False, indent=2)}
-
-TASK:
-1. Objectively grade the entire interview from 0 to 100 (overallScore).
-2. For each question:
-   - If multiple_choice and candidate answered correctly, award 100. If incorrect or skipped, award 0.
-   - If free writing or interview, grade the answer from 0 to 100 on accuracy, professionalism, and relevance.
-   - Provide concise constructive feedback explaining strengths and missed insights.
-3. Write a rich, constructive executive summary ("summaryFeedback") summarizing overall readiness, top strengths, areas for improvement, and recommendations.
-
-Return ONLY a valid JSON object matching this schema:
+        if lang == "BG":
+            prompt = f"""Оцени следното писмено интервю за '{job_title}'. Бъди кратък и прецизен.
+Всичко на БЪЛГАРСКИ.
+Данни: {json.dumps(qa_pairs, ensure_ascii=False)}
+Върни САМО валиден JSON:
 {{
-  "overallScore": 85,
-  "summaryFeedback": "Comprehensive evaluation covering candidate readiness, performance breakdown, key strengths, and recommendations...",
+  "overallScore": 80,
+  "summaryFeedback": "Кратко обобщение (3-4 изречения)...",
   "questionReviews": [
     {{
       "id": "q1",
-      "questionText": "Question text...",
-      "userAnswer": "Candidate answer...",
-      "correctAnswer": "A",
-      "score": 100,
-      "feedback": "Feedback for this question...",
+      "questionText": "Въпрос...",
+      "userAnswer": "Отговор...",
+      "score": 85,
+      "feedback": "Кратка обратна връзка (1-2 изречения)...",
+      "suggestedAnswer": "Примерен верен отговор..."
+    }}
+  ]
+}}"""
+        else:
+            prompt = f"""Evaluate this written interview for '{job_title}'. Be concise and direct.
+Interview Data: {json.dumps(qa_pairs, ensure_ascii=False)}
+Return ONLY valid JSON:
+{{
+  "overallScore": 80,
+  "summaryFeedback": "Concise summary evaluation (3-4 sentences)...",
+  "questionReviews": [
+    {{
+      "id": "q1",
+      "questionText": "Question...",
+      "userAnswer": "Answer...",
+      "score": 85,
+      "feedback": "Concise feedback (1-2 sentences)...",
       "suggestedAnswer": "Model ideal answer..."
     }}
   ]
 }}"""
 
         try:
-            raw_text = self.call_gemini_api(prompt, api_key)
+            raw_text = self.call_gemini_api(prompt, api_key, max_output_tokens=2500)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
