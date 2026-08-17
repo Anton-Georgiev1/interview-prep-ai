@@ -162,5 +162,3 @@ npm run lint
 This project is licensed under the MIT License. Feel free to use, modify, and distribute it to boost your preparation!
 
 ---
-
-<p align="center">Made with ❤️ to help you stand out. Good luck with your preparation!</p>
