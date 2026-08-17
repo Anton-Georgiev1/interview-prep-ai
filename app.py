@@ -18,6 +18,19 @@ HOST = "0.0.0.0"
 
 # In-memory storage for interview sessions
 SAVED_SESSIONS = []
+# Dynamic remembered model - stays on the successfully answered model until unavailable
+ACTIVE_GEMINI_MODEL = "gemini-3.5-flash"
+ALL_GEMINI_MODELS = [
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-latest",
+    "gemini-pro-latest",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro"
+]
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en" class="dark">
@@ -885,6 +898,14 @@ class PythonInterviewServer(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(SAVED_SESSIONS).encode('utf-8'))
+        elif self.path == "/api/active-model":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "active_model": ACTIVE_GEMINI_MODEL,
+                "available_models": ALL_GEMINI_MODELS
+            }).encode('utf-8'))
         else:
             self.send_response(404)
             self.end_headers()
@@ -918,24 +939,14 @@ class PythonInterviewServer(http.server.BaseHTTPRequestHandler):
             self.end_headers()
 
     def call_gemini_api(self, prompt, user_key=None, max_output_tokens=4096):
+        global ACTIVE_GEMINI_MODEL
         api_key = (user_key or os.environ.get("GEMINI_API_KEY", "")).strip()
         if not api_key:
             raise Exception("No Gemini API key provided. Please enter your API key in the 'API Setup' tab.")
 
-        # Prioritize fastest ultra-low-latency models
-        models_to_try = [
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
-            "gemini-3.7-flash",
-            "gemini-3.6-flash",
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
-            "gemini-1.5-flash",
-            "gemini-1.5-flash-8b",
-            "gemini-2.5-pro",
-            "gemini-1.5-pro",
-            "gemini-2.5-flash"
-        ]
+        # Build prioritized models list: try active remembered model first, then fallback to others
+        models_to_try = [ACTIVE_GEMINI_MODEL] + [m for m in ALL_GEMINI_MODELS if m != ACTIVE_GEMINI_MODEL]
+
         payload = {
             "contents": [{
                 "parts": [{"text": prompt}]
@@ -979,6 +990,10 @@ class PythonInterviewServer(http.server.BaseHTTPRequestHandler):
                     # Verify it's valid JSON
                     try:
                         json.loads(text_result)
+                        # Remember this successful model as default for future calls
+                        if ACTIVE_GEMINI_MODEL != model:
+                            print(f"[Gemini Model Switch] Successfully answered with {model}. Saving as default remembered model.")
+                            ACTIVE_GEMINI_MODEL = model
                         return text_result
                     except json.JSONDecodeError:
                         # If truncated by token limit, try next model or raise
